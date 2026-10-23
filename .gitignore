@@ -1,0 +1,15 @@
+# Never commit local transaction data, encryption keys, or secrets
+/data/
+**/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.key
+.env
+.env.*
+!.env.example
+node_modules/
+.DS_Store
+coverage/
+*.log
