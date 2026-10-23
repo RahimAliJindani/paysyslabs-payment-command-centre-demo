@@ -1,1 +1,71 @@
-const $=s=>document.querySelector(s);let merchants=[],merchant,method='payto',latestId=null;const money=n=>new Intl.NumberFormat('en-AU',{style:'currency',currency:'AUD'}).format(n);async function get(url){const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw Error('Request failed');return r.json()};async function init(){merchants=await get('/api/merchants');$('#merchant').innerHTML=merchants.map(m=>`<option value="${m.id}">${m.icon} ${m.name}</option>`).join('');$('#merchant').value='restaurant';$('#merchant').onchange=selectMerchant;$('#item').onchange=paint;$('#payto').onclick=()=>setMethod('payto');$('#payid').onclick=()=>setMethod('payid');await selectMerchant();new EventSource('/api/events').onmessage=()=>updateStatus();setInterval(updateStatus,1800)}function setMethod(v){method=v;$('#payto').classList.toggle('selected',v==='payto');$('#payid').classList.toggle('selected',v==='payid');paint()}async function selectMerchant(){merchant=merchants.find(m=>m.id===$('#merchant').value);$('#item').innerHTML=merchant.items.map(([name,price],i)=>`<option value="${i}">${name} · ${money(price)}</option>`).join('');const profile=await get('/api/business-profile?merchantId='+merchant.id);$('#vcardQR').src='/api/business-card?merchantId='+encodeURIComponent(merchant.id);$('#businessDetails').textContent=`${profile.name} · ${profile.email} · ${profile.phone} · PayTo demo profile (not bank registered)`;latestId=null;paint();updateStatus()}function paint(){const [name,price]=merchant.items[Number($('#item').value)];$('#itemName').textContent=name;$('#amount').textContent=money(price);$('#ipadMerchant').textContent=merchant.name;$('#ipadItem').textContent=name;$('#ipadAmount').textContent=money(price);$('#ipadRail').textContent=method==='payto'?'PayTo':'PayID';$('#checkoutLink').href='/checkout/'+encodeURIComponent(merchant.id)+'?itemIndex='+$('#item').value+'&method='+method;$('#status').textContent='Waiting for customer';$('#status').className='status';$('#ipadRef').textContent='—';$('#ipadReceipt').textContent='Not posted';$('#ipadSettlement').textContent='Unreconciled';latestId=null}async function updateStatus(){if(!merchant)return;try{const all=await get('/api/transactions');const mine=all.filter(t=>t.merchantId===merchant.id);$('#recent').replaceChildren();if(!mine.length){$('#recent').textContent='No payments yet for this merchant.';return}for(const t of mine.slice(0,5)){const div=document.createElement('div');div.className='recentrow';div.textContent=`${t.reference} · ${money(t.amount)} · ${t.status}`;$('#recent').append(div)}const item=merchant.items[Number($('#item').value)][0];const matched=mine.find(t=>t.item===item&&t.method===method);if(!matched)return;latestId=matched.id;$('#ipadRef').textContent=matched.reference;$('#ipadReceipt').textContent=matched.receipt;$('#ipadSettlement').textContent=matched.settlement;const labels={CREATED:'Customer checkout opened',AGREEMENT_PENDING:'Awaiting PayTo authorisation',AWAITING_AUTH:'Awaiting PayID authorisation',AGREEMENT_AUTHORISED:'PayTo agreement authorised',PROCESSING:'Bank simulation processing',CONFIRMED:'✓ Payment successful',DECLINED:'Payment declined',FAILED:'Payment blocked',UNKNOWN:'Outcome unknown'};$('#status').textContent=labels[matched.status]||matched.status;$('#status').className='status '+(matched.status==='CONFIRMED'?'success':['DECLINED','FAILED','UNKNOWN'].includes(matched.status)?'fail':'pending')}catch(e){$('#status').textContent='Connection unavailable'}}init().catch(e=>{$('#status').textContent=e.message});
+import {requireAccess,addSignOut} from './access.js';
+const $=s=>document.querySelector(s);
+const money=n=>new Intl.NumberFormat('en-AU',{style:'currency',currency:'AUD'}).format(n);
+let merchant,merchants=[],method='payto',active=null,events,revision=0,loading=false;
+async function api(url,payload){
+ const r=await fetch(url,{cache:'no-store',method:payload?'POST':'GET',headers:payload?{'content-type':'application/json'}:{},body:payload?JSON.stringify(payload):undefined});
+ const data=await r.json();if(!r.ok)throw Error(data.error||'Request failed');return data;
+}
+const key=()=>`paysyslabs:checkout:${merchant.id}:${$('#item').value}:${method}`;
+function save(){try{if(active)sessionStorage.setItem(key(),JSON.stringify(active));else sessionStorage.removeItem(key())}catch{}}
+function reset(){
+ revision++;active=null;
+ try{active=JSON.parse(sessionStorage.getItem(key())||'null')}catch{}
+ $('#checkoutLink').hidden=!active;$('#paymentQR').hidden=!active;
+ if(active){$('#checkoutLink').href=active.qrUrl;$('#paymentQR').src=active.qrSvgUrl}
+ const [name,price]=merchant.items[Number($('#item').value)];
+ $('#itemName').textContent=name;$('#amount').textContent=money(price);$('#ipadMerchant').textContent=merchant.name;
+ $('#ipadItem').textContent=name;$('#ipadAmount').textContent=money(price);$('#ipadRail').textContent=method==='payto'?'PayTo':'PayID';
+ $('#ipadRef').textContent='—';$('#ipadReceipt').textContent='Not posted';$('#ipadSettlement').textContent='Unreconciled';
+ $('#status').textContent=active?'Loading this checkout…':'Create a checkout to begin';$('#status').className='status';
+ updateStatus();
+}
+function paint(t){
+ $('#ipadRef').textContent=t.reference;$('#ipadReceipt').textContent=t.receipt;$('#ipadSettlement').textContent=t.settlement;
+ const labels={CREATED:'Awaiting customer',AGREEMENT_PENDING:'Awaiting PayTo authorisation',AWAITING_AUTH:'Awaiting PayID authorisation',AGREEMENT_AUTHORISED:'Agreement authorised; collection pending',PROCESSING:'Bank simulation processing',CONFIRMED:'✓ Payment successful',DECLINED:'Payment declined',FAILED:'Payment blocked',UNKNOWN:'Outcome unknown — verification required',EXPIRED:'Checkout expired'};
+ $('#status').textContent=labels[t.status]||t.status;
+ $('#status').className='status '+(t.status==='CONFIRMED'?'success':['DECLINED','FAILED','EXPIRED','UNKNOWN'].includes(t.status)?'fail':'pending');
+}
+async function updateStatus(){
+ if(!merchant||loading)return;loading=true;const version=revision,id=merchant.id,checkout=active;
+ try{
+  const [recent,current]=await Promise.all([api('/api/transactions?merchantId='+encodeURIComponent(id)),checkout?api('/api/transactions/'+checkout.id):null]);
+  if(version!==revision)return;
+  $('#recent').replaceChildren();
+  if(!recent.length)$('#recent').textContent='No payments yet for this merchant.';
+  for(const t of recent.slice(0,5)){const row=document.createElement('div');row.className='recentrow';row.textContent=`${t.reference} · ${money(t.amount)} · ${t.status}`;$('#recent').append(row)}
+  if(current)paint(current);
+  $('#connection').textContent='Connected';
+ }catch(e){if(version===revision){$('#connection').textContent='Connection unavailable';$('#status').textContent=e.message}}
+ finally{loading=false;if(version!==revision)updateStatus()}
+}
+async function selectMerchant(){
+ revision++;merchant=merchants.find(m=>m.id===$('#merchant').value);
+ $('#item').replaceChildren();for(const [i,[name,price]] of merchant.items.entries()){const option=document.createElement('option');option.value=i;option.textContent=`${name} · ${money(price)}`;$('#item').append(option)}
+ $('#vcardQR').src='/api/business-card?merchantId='+encodeURIComponent(merchant.id);
+ const id=merchant.id,profile=await api('/api/business-profile?merchantId='+encodeURIComponent(id));if(id!==merchant.id)return;
+ $('#businessDetails').textContent=`${profile.name} · ${profile.email} · ${profile.phone} · Synthetic contact profile`;
+ reset();events?.close();events=new EventSource('/api/events?merchantId='+encodeURIComponent(id));
+ events.onopen=()=>{$('#connection').textContent='Connected'};
+ events.onerror=()=>{$('#connection').textContent='Reconnecting…'};
+ events.onmessage=()=>updateStatus();
+}
+$('#newCheckout').onclick=async()=>{
+ const button=$('#newCheckout'),version=revision;button.disabled=true;
+ try{
+  const t=await api('/api/transactions',{merchantId:merchant.id,itemIndex:Number($('#item').value),method});
+  if(version!==revision)return;
+  active={id:t.id,qrUrl:t.qrUrl,qrSvgUrl:t.qrSvgUrl};save();reset();
+ }catch(e){$('#status').textContent=e.message}finally{button.disabled=false}
+};
+async function init(){
+ const access=await requireAccess();if(!access)return;addSignOut(access);
+ merchants=(await api('/api/merchants')).filter(m=>access.merchantIds.includes(m.id));
+ for(const m of merchants){const option=document.createElement('option');option.value=m.id;option.textContent=`${m.icon} ${m.name}`;$('#merchant').append(option)}
+ if(merchants.some(m=>m.id==='restaurant'))$('#merchant').value='restaurant';
+ $('#merchant').onchange=()=>selectMerchant().catch(e=>{$('#status').textContent=e.message});$('#item').onchange=reset;
+ for(const value of ['payto','payid'])$('#'+value).onclick=()=>{method=value;for(const v of ['payto','payid']){$('#'+v).classList.toggle('selected',v===value);$('#'+v).setAttribute('aria-pressed',String(v===value))}reset()};
+ await selectMerchant();setInterval(()=>{if(!document.hidden)updateStatus()},10000);
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)updateStatus()});
+}
+init().catch(e=>{const target=$('#status')||$('#loginError');if(target)target.textContent=e.message});

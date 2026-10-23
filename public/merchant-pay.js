@@ -14,7 +14,7 @@ async function begin(){
     $('#name').textContent = merchant.name;
     $('#description').textContent = merchant.items[itemIndex][0] + ' · Amount set by business';
     $('#price').textContent = new Intl.NumberFormat('en-AU',{style:'currency',currency:'AUD'}).format(merchant.items[itemIndex][1]);
-    const response = await fetch('/api/transactions', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({merchantId,itemIndex,method})});
+    const response = await fetch('/api/public/checkouts', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({merchantId,itemIndex,method})});
     const tx = await response.json();
     if(!response.ok) throw Error(tx.error || 'Could not initiate checkout');
     location.replace('/pay/' + encodeURIComponent(tx.qrToken));

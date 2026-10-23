@@ -10,6 +10,7 @@ services:
         required: false
     environment:
       PORT: "4173"
+      HOST: "0.0.0.0"
       DATA_DIR: /app/data
     volumes:
       - paysyslabs_demo_data:/app/data

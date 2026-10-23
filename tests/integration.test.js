@@ -1,11 +1,28 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {mkdtempSync,rmSync} from 'node:fs';import {tmpdir} from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {setTimeout as wait} from 'node:timers/promises';
-const data=mkdtempSync(path.join(tmpdir(),'baap-v2-')),port=42000+Math.floor(Math.random()*1000);let child;const url=`http://127.0.0.1:${port}`;
-async function api(p,method='GET',body){const r=await fetch(url+p,{method,headers:{'content-type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json()}}
-async function ready(){for(let i=0;i<60;i++){try{const r=await fetch(url+'/api/health');if(r.ok)return}catch{}await wait(100)}throw Error('server not ready')}
-async function start(){child=spawn(process.execPath,['server/index.js'],{cwd:process.cwd(),env:{...process.env,PORT:String(port),DATA_DIR:data},stdio:'ignore'});await ready()}
-async function stop(){child.kill();await wait(150)}
-test('SQLite persistence, QR, PayID, PayTo, encryption masking, failures and reconciliation',async()=>{try{await start();const invalid=await api('/api/transactions','POST',{merchantId:'salon',itemIndex:0,method:'payid',phone:'+611234'});assert.equal(invalid.status,400);
-const created=await api('/api/transactions','POST',{merchantId:'salon',itemIndex:0,method:'payid',phone:'+61412345678'});assert.equal(created.status,201);const t=created.data;assert.equal(t.amount,65);assert.ok(!JSON.stringify(t).includes('412345678'));const svg=await fetch(url+t.qrSvgUrl).then(r=>r.text());assert.ok(svg.startsWith('<svg'));assert.ok(svg.includes('<rect'));const scanned=await api('/api/public/'+t.qrToken);assert.equal(scanned.data.reference,t.reference);assert.ok(!JSON.stringify(scanned.data).includes('412345678'));
-let r=await api(`/api/transactions/${t.id}/action`,'POST',{action:'start'});assert.equal(r.data.status,'AWAITING_AUTH');r=await api(`/api/transactions/${t.id}/action`,'POST',{action:'authorise'});assert.equal(r.data.status,'PROCESSING');r=await api(`/api/transactions/${t.id}/action`,'POST',{action:'timeout'});assert.equal(r.data.status,'UNKNOWN');assert.equal(r.data.receipt,'NOT_POSTED');r=await api(`/api/transactions/${t.id}/action`,'POST',{action:'confirm'});assert.equal(r.data.status,'CONFIRMED');assert.equal(r.data.receipt,'POSTED');const repeated=await api(`/api/transactions/${t.id}/action`,'POST',{action:'confirm'});assert.equal(repeated.status,400);r=await api(`/api/transactions/${t.id}/reconcile`,'POST');assert.equal(r.data.settlement,'RECONCILED');const inspect=await api(`/api/transactions/${t.id}/inspect`);assert.equal(inspect.data.EndToEndId,t.reference);assert.equal(inspect.data.IntrBkSttlmAmt.currency,'AUD');assert.ok(inspect.data.TxId.startsWith('SIM-'));
-const payto=await api('/api/transactions','POST',{merchantId:'gym',itemIndex:0,method:'payto',phone:'+61412345679'});const id=payto.data.id;await api(`/api/transactions/${id}/action`,'POST',{action:'start'});r=await api(`/api/transactions/${id}/action`,'POST',{action:'authorise'});assert.equal(r.data.status,'AGREEMENT_AUTHORISED');assert.equal(r.data.receipt,'NOT_POSTED');await api(`/api/transactions/${id}/action`,'POST',{action:'collect'});r=await api(`/api/transactions/${id}/action`,'POST',{action:'bank-failure'});assert.equal(r.data.status,'FAILED');assert.equal(r.data.receipt,'NOT_POSTED');const insight=await api('/api/insights?merchantId=gym');assert.equal(insight.data.revenue,0);const dashboard=await api('/api/merchant-dashboard?merchantId=salon');assert.equal(dashboard.status,200);assert.equal(dashboard.data.lifetime.confirmed,1);assert.equal(dashboard.data.lifetime.revenue,65);assert.equal(dashboard.data.products.find(x=>x.units===1).units,1);assert.equal(dashboard.data.transactions[0].status,'CONFIRMED');assert.ok(!JSON.stringify(dashboard.data).includes('412345678'));const badDashboard=await api('/api/merchant-dashboard?merchantId=missing');assert.equal(badDashboard.status,400);
-await stop();await start();const persisted=await api('/api/transactions/'+t.id);assert.equal(persisted.data.status,'CONFIRMED');assert.equal(persisted.data.settlement,'RECONCILED');}finally{if(child)await stop();rmSync(data,{recursive:true,force:true})}});
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {demo} from './helpers/server.js';
+
+test('SQLite persistence, QR, PayID, PayTo, masking, failures and reconciliation',async t=>{
+ const app=await demo();t.after(()=>app.close());await app.admin();
+ const invalid=await app.api('/api/transactions','POST',{merchantId:'salon',itemIndex:0,method:'payid',phone:'+611234'});assert.equal(invalid.status,400);
+ const created=await app.api('/api/transactions','POST',{merchantId:'salon',itemIndex:0,method:'payid',phone:'+61412345678'});assert.equal(created.status,201);
+ const tx=created.data;assert.equal(tx.amount,65);assert.ok(!JSON.stringify(tx).includes('412345678'));
+ const svg=await app.request(tx.qrSvgUrl).then(r=>r.text());assert.ok(svg.startsWith('<svg'));assert.ok(svg.includes('<rect'));
+ const scanned=await app.api('/api/public/'+tx.qrToken);assert.equal(scanned.data.reference,tx.reference);assert.ok(!JSON.stringify(scanned.data).includes('412345678'));
+ const action=async name=>app.api(`/api/transactions/${tx.id}/action`,'POST',{action:name});
+ assert.equal((await action('start')).data.status,'AWAITING_AUTH');
+ assert.equal((await action('authorise')).data.status,'PROCESSING');
+ const unknown=await action('timeout');assert.equal(unknown.data.status,'UNKNOWN');assert.equal(unknown.data.receipt,'NOT_POSTED');
+ const confirmed=await action('confirm');assert.equal(confirmed.data.status,'CONFIRMED');assert.equal(confirmed.data.receipt,'POSTED');
+ assert.equal((await action('confirm')).status,400);
+ assert.equal((await app.api(`/api/transactions/${tx.id}/reconcile`,'POST')).data.settlement,'RECONCILED');
+ const inspect=await app.api(`/api/transactions/${tx.id}/inspect`);assert.equal(inspect.data.EndToEndId,tx.reference);assert.equal(inspect.data.IntrBkSttlmAmt.currency,'AUD');assert.ok(inspect.data.TxId.startsWith('SIM-'));
+ const payto=await app.api('/api/transactions','POST',{merchantId:'gym',itemIndex:0,method:'payto',phone:'+61412345679'});
+ const id=payto.data.id,advance=async action=>app.api(`/api/transactions/${id}/action`,'POST',{action});
+ await advance('start');const authorised=await advance('authorise');assert.equal(authorised.data.status,'AGREEMENT_AUTHORISED');assert.equal(authorised.data.receipt,'NOT_POSTED');
+ await advance('collect');const failed=await advance('bank-failure');assert.equal(failed.data.status,'FAILED');assert.equal(failed.data.receipt,'NOT_POSTED');
+ assert.equal((await app.api('/api/insights?merchantId=gym')).data.revenue,0);
+ const dashboard=await app.api('/api/merchant-dashboard?merchantId=salon');assert.equal(dashboard.status,200);assert.equal(dashboard.data.lifetime.confirmed,1);assert.equal(dashboard.data.lifetime.revenue,65);assert.equal(dashboard.data.products.find(x=>x.units===1).units,1);assert.equal(dashboard.data.transactions[0].status,'CONFIRMED');assert.ok(!JSON.stringify(dashboard.data).includes('412345678'));
+ assert.equal((await app.api('/api/merchant-dashboard?merchantId=missing')).status,400);
+ await app.stop();await app.start();const persisted=await app.api('/api/transactions/'+tx.id);assert.equal(persisted.data.status,'CONFIRMED');assert.equal(persisted.data.settlement,'RECONCILED');
+});

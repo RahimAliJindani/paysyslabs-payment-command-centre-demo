@@ -1,0 +1,38 @@
+/* Shared accessibility, sign-in, and narrow-screen layout safeguards. */
+[hidden]{display:none!important}
+html{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,select{font:inherit}
+button:disabled{opacity:.55;cursor:wait;transform:none!important}
+button,a,input,select,summary{touch-action:manipulation}
+button,a,select,summary{min-height:44px}
+:focus-visible{outline:3px solid #b77b00;outline-offset:3px}
+main,.panel,.card,.metric,.columns>*{min-width:0}
+p,h1,h2,h3,.recentrow,.status{overflow-wrap:anywhere}
+.access-panel{box-sizing:border-box;width:calc(100% - 32px);max-width:520px;margin:40px auto;padding:28px;background:white;border:1px solid #d4e0ea;border-radius:20px;box-shadow:0 14px 44px #0f2b4e17;color:#152c45}
+.access-panel h1{font-size:30px}
+.access-panel label{display:grid;gap:8px;margin:16px 0;font-weight:600}
+.access-panel input,.access-panel select{box-sizing:border-box;width:100%;min-width:0;min-height:48px;padding:12px;border:1px solid #bacbdc;border-radius:10px}
+.access-panel button{width:100%;padding:14px;border:0;border-radius:10px;background:#1456a0;color:white}
+#loginError{color:#9e2424}
+.session-signout{border:1px solid #bacbdc;border-radius:10px;padding:10px 16px;background:#fff;color:#123c70;white-space:nowrap}
+.payment-qr{display:block;width:min(210px,100%);height:auto;margin:20px auto;padding:10px;border:1px solid #d4e0ea;border-radius:12px;background:#fff}
+.pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap;margin:16px 0}
+#refreshStatus{min-height:44px}
+#resultTitle:focus{outline:none}
+@media(max-width:1050px){.layout aside .navitem{display:block}.layout aside .navitem.active{display:none}}
+@media(max-width:650px){
+ header{height:auto!important;flex-wrap:wrap;gap:12px}
+ .headline{flex-wrap:wrap;gap:12px}
+ .toolbar>div{flex-wrap:wrap;max-width:100%}
+ .toolbar input{min-width:0;width:100%}
+ .cards,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .line{grid-template-columns:minmax(0,1fr) minmax(40px,1fr);gap:8px}
+ .line>strong{grid-column:1/-1;text-align:right}
+ .card strong{overflow-wrap:anywhere}
+ .kv{gap:12px;flex-wrap:wrap}
+ .ipadbar{gap:10px;flex-wrap:wrap}
+ .checkout-progress{gap:8px;flex-wrap:wrap}
+ .trust-strip{flex-wrap:wrap;gap:8px}
+}
+@media(max-width:360px){.cards,.metrics{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
